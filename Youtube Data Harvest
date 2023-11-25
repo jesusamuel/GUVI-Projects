@@ -1,0 +1,448 @@
+import streamlit as st
+import pandas as pd
+import mysql.connector
+import pymongo
+from googleapiclient.discovery import build
+import numpy as np
+from PIL import Image,ImageDraw,ImageFont
+import plotly.express as px
+
+
+
+                            
+
+                
+#############################################################################################################################
+
+def migrate_to_mysql(channel_id):
+
+    a,b,c =st.columns([3,1,1])
+
+    ##Creating connection with the Mysql DB
+    
+    mydb = mysql.connector.connect(host='localhost',
+                              user='root',
+                              password='******',
+                              database='Guvi')
+
+    mycursor = mydb.cursor()
+
+    #Creating connection with the Mongo DB
+
+    con=pymongo.MongoClient('mongodb://127.0.0.1:27017/')
+
+    #print(con.list_database_names())
+
+    db=con['project1']
+    col=db['test1']
+
+    #col.drop()
+    #col.insert_one(result)
+    #for i in col.find({'playlists':{'$elemMatch':{'p_id':'PL0e9S3wU-rHIFMaCbN809AbR9rm5nd_Vv'}}},{'_id':0,'channel_details':0,'comment_details':0}):
+
+    
+    if channel_id:        
+
+        for i in col.find({'channelId':channel_id},{'_id':0}):
+            #print(i['channel_details']," \n",i['channelId'])   
+
+            row=(i['channelId'],i['channel_details']['channel_name'],i['channel_details']['subscriber_count']
+                                ,i['channel_details']['video_count'])
+                
+            sql="insert into channel_details values(%s,%s,%s,%s)"
+            mycursor.execute(sql,row)
+                
+####################################################################
+
+        for i in col.find({'channelId':channel_id},{'_id':0}):
+            for j in i['playlists']:
+                row=(i['channelId'],j['p_id'],j['playlist_name'])
+                #print(row)
+                sql="insert into playlist_details values(%s,%s,%s)"
+                mycursor.execute(sql,row)
+                    
+###################################################################
+
+        for i in col.find({'channelId':channel_id},{'_id':0}):
+            for j in i['video_details']:
+                row=(i['channelId'],j['video_id'],j['likes_count'],j['views_count'],j['comment_count'])
+                #print(row)
+                sql="insert into video_details values(%s,%s,%s,%s,%s)"
+                mycursor.execute(sql,row)      
+########################################################################
+
+        for i in col.find({'channelId':channel_id},{'_id':0}):
+            for j in i['comment_details']:
+                row=(i['channelId'],j['comment_id'],j['video_id'],j['comment_text'],j['author_name'])
+                #print(row)
+                sql="insert into comment_details values(%s,%s,%s,%s,%s)"
+                mycursor.execute(sql,row)
+                
+        mydb.commit()
+
+        
+        return True       
+            
+
+
+
+           
+
+###################################################################################################            
+            
+
+def youtube_data_harvest(data,channel_id):
+    
+    try:
+
+        a,b,c =st.columns([3,1,1])
+
+        user_key = 'AIzaSyCdSNVvCPzyTIzqV97o_S4zqX7qkNayzbA'
+        youtube=build('youtube','v3',developerKey=user_key)
+           
+        channel={}
+        playlist_details ={}
+        video_details={}
+        comments={}
+        result={}
+        p_lst=[]
+        v_lst=[]
+        c_lst=[]
+        channel['channel_name']=data['items'][0]['snippet']['title'] #channel name
+
+        channel['subscriber_count']=data['items'][0]['statistics']['subscriberCount'] 
+
+        channel['video_count']=data['items'][0]['statistics']['videoCount']
+
+        ### Getting playlist details
+        request = youtube.playlists().list(
+                    part="snippet,contentDetails",
+                    channelId=channel_id,
+                    maxResults=50
+                    )
+
+        data1 = request.execute()
+
+        for i in data1['items']:
+            playlist_details={'p_id':i['id'],'playlist_name':i['snippet']['title']}
+            p_lst.append(playlist_details)
+
+
+
+        #### Getting a video list
+
+        request = youtube.search().list(
+            type='video',
+                    part="id",
+                maxResults=100,
+                    channelId=channel_id
+                )
+
+        data2 = request.execute()
+
+        for res in data2['items']:
+            request = youtube.videos().list(
+                    part="id,statistics",
+                maxResults='100',
+                    id=res['id']['videoId']
+                )
+            data4 = request.execute()
+                
+            video_details={'video_id':res['id']['videoId'],'likes_count':data4['items'][0]['statistics']['likeCount'],
+                            'views_count':data4['items'][0]['statistics']['viewCount'],
+                            'comment_count':data4['items'][0]['statistics']['commentCount']}
+
+            v_lst.append(video_details)
+
+        #### Getting comments
+            request = youtube.commentThreads().list(
+                
+                    part="id,replies,snippet",
+                maxResults=100,
+                    videoId=res['id']['videoId']
+                )
+
+            data3 = request.execute()
+            for j in data3['items']:
+                comments={'comment_id':j['id'],'video_id':j['snippet']['videoId'],'comment_text':j['snippet']['topLevelComment']['snippet']['textOriginal'],
+                                'author_name':j['snippet']['topLevelComment']['snippet']['authorDisplayName']}
+                    
+                c_lst.append(comments)
+
+        result['channelId']=channel_id
+
+        result['channel_details']=channel
+        result['playlists']=p_lst
+        result['video_details']=v_lst
+        result['comment_details']=c_lst
+            #print("\n"+"\n"+"\n",result)
+            #return result
+
+    #################################################################################################        
+
+        #Creating connection with the Mongo DB
+
+        con=pymongo.MongoClient('mongodb://127.0.0.1:27017/')
+
+
+        db=con['project1']
+        col=db['test1']
+
+        col.insert_one(result)
+
+            #print(result)
+
+                            
+        a.success("Data fetched successfully and stored in Mongo DB ")
+                            
+        return True
+
+    except:
+        a.error("Enter valid youtube ID",icon="⚠️")
+    
+            
+
+
+
+
+
+    ##### Fetching youtube data
+######################################################
+        
+data={}
+
+##########################################################################
+
+def get_channel_details(table):
+    
+    a,b,c =st.columns([3,1,1])
+
+    try:
+        mydb = mysql.connector.connect(host='localhost',
+                                      user='root',
+                                      password='*****',
+                                      database='Guvi')
+
+        mycursor = mydb.cursor()
+
+        table_name = table
+        sql="select * from %s;"%table_name
+        mycursor.execute(sql)
+        data = mycursor.fetchall()
+        sql="select * from %s;"%table_name
+        sql="Desc %s;"%table_name
+        mycursor.execute(sql)
+        data1=mycursor.fetchall()
+        ad=list(pd.DataFrame(data1)[0])
+        
+        df=pd.DataFrame(data=data,columns=ad)
+
+        return df
+
+    except:
+
+        a.error(f"Table '{table}' doesn't Exists",icon="⚠️")
+
+
+#####################################################################################
+
+
+
+def create_data_model(user_query):
+    
+    a,b,c =st.columns([3,1,1])
+
+    try:
+        mydb = mysql.connector.connect(host='localhost',
+                                      user='root',
+                                      password='******',
+                                      database='Guvi')
+        sql= user_query
+
+        mycursor = mydb.cursor()
+        
+        mycursor.execute(sql)
+        data = mycursor.fetchall()
+        df=pd.DataFrame(data)
+
+        a.write(df)
+        
+    except:
+        
+        a.error(f"Query you entered is Invalid",icon="⚠️")
+
+
+
+def main():
+
+    st. set_page_config(layout="wide")
+    mydb = mysql.connector.connect(host='localhost',
+                                      user='root',
+                                      password='*******',
+                                      database='Guvi')
+
+    mycursor = mydb.cursor()
+
+
+    #Creating connection with the Mongo DB
+
+    con=pymongo.MongoClient('mongodb://127.0.0.1:27017/')
+
+    #print(con.list_database_names())
+
+    db=con['project1']
+    col=db['test1']
+    df=col.find({},{'channelId':1,'_id':0})
+
+    all_channel=tuple(pd.DataFrame(df)['channelId'])
+
+    
+    logo=Image.open("/Users/jesusamuel/youtube_logo.ico")
+    img= Image.new('RGB',(1600,125),'white')
+
+    draw = ImageDraw.Draw(img)
+    
+
+    img.paste(logo)
+
+    font_size = 60
+    font = ImageFont.truetype("Arial Unicode.ttf", font_size)  # You may need to adjust the font path
+    text = "Youtube Data Harvest"
+    #text_width, text_height = draw.textsize(text, font)
+    draw.text((500,25),text,font=font, fill=(0,0,0))
+
+    
+    st.image(img)
+
+    a,b,c =st.columns([3,0.3,3])
+
+    a.subheader("Enter your youtube ID to fetch data",divider='rainbow')
+
+    
+
+    ############ Bar Chart ##########
+
+    sql = "select channel_name,subscriber_count,video_count from channel_details;"
+
+    mycursor.execute(sql)
+    
+    data = mycursor.fetchall()
+
+    df = pd.DataFrame(data, columns=["channel_name", "subscriber_count", "video_count"])
+
+
+    fig = px.bar(df, y="subscriber_count",x='channel_name',width=600,height=400,color='video_count',title='                                                            Youtube channels chart')
+    fig.write_html("test.html")
+    c.write(fig)
+
+
+
+
+    
+    channel_id = a.text_input('',placeholder='Enter Youtube ID')
+
+    if "button_clicked" not in st.session_state:
+        st.session_state.button_clicked = False
+
+    def callback():
+        st.session_state.button_clicked = True
+
+    if a.button("Submit",on_click = callback) or st.session_state.button_clicked:
+
+        
+        if channel_id in list(all_channel):
+
+            a.success("Data Already Exists")
+            
+        else:    
+
+            user_key = 'AIzaSyCdSNVvCPzyTIzqV97o_S4zqX7qkNayzbA'
+            youtube=build('youtube','v3',developerKey=user_key) 
+
+                    #channel_id='UCJcCB-QYPIBcbKcBQOTwhiA'
+            request = youtube.channels().list(
+                            part="snippet,contentDetails,statistics",
+                            id=channel_id)
+
+            data=request.execute()
+
+            if len(data) == 3:
+                 a.error("Enter valid youtube ID",icon="⚠️")
+            else:
+                result1 = youtube_data_harvest(data,channel_id)
+
+                if result1:
+
+                    a.success("Data Successfully fetched and stored in MongoDB")
+
+     ######index=all_channels.index('--Enter ChannelID--'),
+    a.subheader("Select Youtube ID to migrate data to Mysql",divider='rainbow')             
+
+    data_to_migrate = a.selectbox('',all_channel,index=None,placeholder='Enter or Select ChannelID',key='44')
+
+
+    if a.button("Migrate Data to Mysql"):
+
+        if data_to_migrate and (data_to_migrate != '--Enter ChannelID--'):
+
+            sql = "select channel_id from channel_details;"
+
+            mycursor.execute(sql)
+    
+            data = mycursor.fetchall()
+            df= list(pd.DataFrame(data)[0])
+    
+            if data_to_migrate in df:
+
+                c.success("Data Already Exists")
+            else:    
+
+                res = migrate_to_mysql(data_to_migrate)
+
+                if res:
+
+                    c.success("Data Migrated to Mysql Successfully!")
+        
+            
+
+                    
+    a.subheader("Select table name to Display data",divider='rainbow')
+    table = a.selectbox('',
+    ('channel_details', 'playlist_details', 'video_details','comment_details'),index=None,placeholder="Select table")
+    
+    if a.button("Click to view Data"):
+        if table:
+            
+            res1=get_channel_details(table)
+            
+            if len(res1) > 0:
+
+                c.write(res1)
+            
+        else:
+
+            a.error('Select any table from Dropdown',icon="⚠️")
+    else:
+
+        res1=get_channel_details('channel_details')
+            
+        if len(res1) > 0:
+            c.write(res1)
+        
+
+            
+
+    a.subheader("Enter your query to Display data",divider='rainbow')
+
+    user_query = a.text_input('',key='5',placeholder="Enter your Query")
+
+    if a.button('Click to display',key='3'):
+        if user_query:
+
+            create_data_model(user_query)
+            
+        
+
+
+if __name__ == "__main__":
+    main()
